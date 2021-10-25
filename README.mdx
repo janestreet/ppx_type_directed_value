@@ -1,0 +1,587 @@
+ppx_type_directed_value
+=======================
+
+Introduction
+================
+
+`Ppx_type_directed_value` is a ppx that does `[@@deriving]`-style
+generation of type-directed values based on user-provided modules. The
+user-provided modules tell `ppx_type_directed_value` how to compose
+type-directed values (for example, combine type-directed values of the
+fields of a record to form a type-directed value for the record
+itself).
+
+This allows a wide variety of PPXs such as `ppx_sexp_conv`,
+`ppx_compare`, `ppx_enumerate`, etc. to be implemented with
+`ppx_type_directed_value`, but with some runtime cost.
+
+This PPX currently supports deriving type-directed values for records, ordinary
+& polymorphic variants and tuples. It also supports custom user-defined attributes
+on record and variant fields.
+
+Motivation
+==============
+
+Many deriving PPXs have a similar quasi-recursive nature where the resulting
+value derived by the PPX for a type is the composition of relevant values
+assumed to be defined for each constituent of the type, where these values
+are either "base cases" or are derived from the same PPX.
+
+Using `ppx_sexp_conv` as an example, `sexp_of_t` where `t` is a record
+will call the corresponding `sexp_of_[type]` on each field of the
+record, place it in a `Sexp.List` with the field name, and place all
+the `Sexp.t` for each field in another `Sexp.List`. Here,
+`sexp_of_[type]` is often produced by `[type]` itself having a
+`[@@deriving sexp]` annotation, although it's also sometimes manually
+defined.
+
+`Ppx_type_directed_value` allows users to define new `deriving`
+annotations following this pattern without having to write any ppx
+code, thus avoiding the boilerplate of registering your deriver,
+traversing the AST etc.
+
+Quickstart
+===============
+The easiest way to get started with `ppx_type_directed_value` is to
+use an applicative.  This might not give you all the features you
+want, but it'll get you off the ground.
+
+For example, suppose you want to turn the `Command.Param` applicative into a ppx.  Then make a
+module (called, say, `Type_directed.Command`) with this contents:
+<!-- $MDX file=examples/type_directed_command.ml,part=of_applicative -->
+```ocaml
+open Ppx_type_directed_value_runtime
+include Converters.Of_applicative (Core.Command.Param)
+```
+
+Then, add to your jbuild:
+
+```
+(preprocess (pps (ppx_type_directed_value -module -Type_directed.Command)))
+```
+
+Then you'll be able to do things like this:
+<!-- $MDX file=test/inline/applicative.ml,part=applicative_demo -->
+```ocaml
+module Host_and_port = struct
+  type t = Host_and_port.t =
+    { host : string
+             [@command.custom
+               let open Command.Param in
+               flag "host" (required string) ~doc:"host"]
+    ; port : int
+             [@command.custom
+               let open Command.Param in
+               flag "port" (required int) ~doc:"port"]
+    }
+  [@@deriving command]
+end
+
+type t =
+  { host_and_port : Host_and_port.t
+  ; name          : string option
+           [@command.custom
+             let open Command.Param in
+             flag "name" (optional string) ~doc:"name"]
+  }
+[@@deriving command]
+```
+
+This approach does have limitations.  For example, in this case
+there's some unnecessary repetition between the field names and the
+flag names, variants won't be supported, and you won't be able to use
+attributes besides the custom one (`command.custom` in this case).
+But it may be enough for you.
+
+If you want to learn how to lift any of those restrictions, either
+read on or poke around the examples/ directory.
+
+Raw Interface
+=====================
+
+**Warning:** This section defines the "raw interface" that will give
+you the most control over how the ppx works.  However, it's fairly
+involved.  For a first read, you might just skim this section and
+instead read the "Converters" section below.  That section describes
+some utility functors which make it so that you don't have to write
+the raw interface by hand.
+
+The PPX expects to take in a module of the following type to guide the
+generation of arbitrary type-directed values.
+
+<!-- $MDX file=ppx_runtime/type_directed.mli,part=interface -->
+```ocaml
+(** Signature that a user-provided module should implement to guide the
+    code generation of type-directed values *)
+module type S = sig
+  (** Type-directed value of interest *)
+  module T : Type_directed_value
+
+  (** Given transformations between two isomorphic types 'a, 'b,
+      turns a 'a type-directed value to a 'b type-directed value
+  *)
+  val apply_iso  : 'a T.t -> ('a -> 'b) -> ('b -> 'a) -> 'b T.t
+
+  val of_tuple   : ('a, 'length) Tuple(T).t -> 'a T.t
+  val of_record  : ('a, 'length) Record(T).t -> 'a T.t
+  val of_variant : ('a, 'length) Variant(T).t -> 'a T.t
+end
+```
+
+Type-directed value
+------------------------
+
+<!-- $MDX file=ppx_runtime/type_directed.mli,part=tdv_sig -->
+```ocaml
+module type Type_directed_value = sig
+  type 'a t
+
+  (** ['a attribute] allows supporting attributes such as
+
+      {[
+        type t =
+          { foo : int [@my_module attr]
+          ; ...
+          } [@@deriving my_module]
+      ]}
+
+      where in the above example [attr] would have type [int My_module.attribute].
+
+      If you don't want to use this feature, you can define [type 'a attribute =
+      Nothing.t]. *)
+  type 'a attribute
+end
+```
+
+A "type-directed value" is a value associated to a given type which can be
+derived from the type definition in some way. In this context, we expect that
+the type-directed value for a record can be derived from the values for the fields
+and similarly for variants and tuples.
+
+For example, if we were to implement `ppx_sexp_conv`, the type of the type-directed value
+would be
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=sexp_implementation -->
+```ocaml
+module Sexp = struct
+  type 'a t =
+    { sexp_of_t : 'a -> Sexp.t
+    ; t_of_sexp : Sexp.t -> 'a
+    }
+
+  (* Don't implement any attributes for now *)
+  type 'a attribute = Nothing.t
+end
+```
+
+and the type of the type-directed value of a type `t` would be `t T.t`.
+
+of_{tuple, record, variant}
+----------------------------------
+
+At a high level, these functions are the underlying implementations for composing
+type-directed values from the constituent types of a tuple/record/variant.
+They each take in a data structure, which contains the type-directed
+values and other information (such as field names/constructor names/attributes)
+that represents a tuple/record/variant type, and should return a
+type-directed value for the tuple/record/variant type. We discuss the specifics below.
+
+
+We begin with the simplest case - the tuple type. In order to support
+tuples with arbitrary elements, we define a GADT to package the type-directed value
+of each tuple element.
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=tuple -->
+```ocaml
+  module Tuple (T : Type_directed.Type_directed_value) : sig
+    type ('a, 'length) seq =
+      | [] : (unit, zero) seq
+      | ( :: ) : 'a T.t * ('b, 'l) seq -> ('a * 'b, 'l succ) seq
+
+    type ('a, 'length) t = ('a, 'length succ succ) seq
+  end
+```
+This enforces that the length of the list is at least 2.
+
+The first index of the GADT, `'a`, is a nested pair that represents the
+type of each element of the tuple packaged. The second index of the GADT,
+`'length` tracks the length of the tuple at the type level. This data
+structure can be thought of as a normal list where each element is the
+corresponding type-directed value of each element in the tuple and
+also tracks the type of each element as well as the length.
+
+For example, given the tuple type `type t = int * string`, the data structure
+given to `of_tuple` is `[{module}_int; {module}_string]` with type
+`((int, (string, unit)), zero succ succ) Tuple(T).t`.
+Note that the type-directed value `of_tuple` is expected to
+return has type `(int, (string, unit)) T.t`, which is not the same as
+`t T.t`. This is how `apply_iso` is used and will be discussed below.
+
+The following is an example implementation of `of_tuple` for a type-directed value
+that is the `equals` function.
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=equal_implementation -->
+```ocaml
+module T = struct
+  type 'a t         = 'a -> 'a -> bool
+  type 'a attribute = Nothing.t
+end
+```
+
+<!-- $MDX file=examples/type_directed_equal.ml,part=equals_of_tuple -->
+```ocaml
+let rec of_tuple : type a len. (a, len) Type_directed.Tuple(T).t -> a T.t =
+  fun t ->
+  match t with
+  | ([ v1; v2 ]                : _ Type_directed.Tuple(T).t) ->
+    fun (fst1, (snd1, ())) (fst2, (snd2, ())) -> v1 fst1 fst2 && v2 snd1 snd2
+  | (v1 :: (_ :: _ :: _ as tl) : _ Type_directed.Tuple(T).t) ->
+    fun (hd1, tl1) (hd2, tl2) -> v1 hd1 hd2 && (of_tuple tl) tl1 tl2
+;;
+```
+
+It is worth noting that the data structure can be similarly pattern-matched
+like normal lists with a twist. Since OCaml tuples must have at least two
+elements, the data structure also guarantees that there are at least two
+elements at the type level. Thus, the base case is a "list" with
+two elements while the pattern of the inductive case requires the
+tail `tl` to have at least two elements to help the typechecker
+verify that `of_tuple` can be recursively called on it.
+
+`of_record` and `of_variant` work similarly but with inputs `('a, 'length) Record(T).t`
+and `('a, 'length) Variant(T).t` instead. Both record and variant data structures
+make use of the `Key` module which contains the name (field name for records,
+constructor names for variants), a type-directed value and the attribute if present.
+
+<!-- $MDX file=ppx_runtime/type_directed.mli,part=key_sig -->
+```ocaml
+module Key : sig
+  type ('a, 'attribute) t =
+    { name      : string
+    ; value     : 'a
+    ; attribute : 'attribute option
+    }
+end
+```
+
+The record data structure is similarly a GADT that is similar to a list where
+each element is a `('a, 'attribute) Key(T).t` as shown below.
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=record -->
+```ocaml
+  module Record (T : Type_directed.Type_directed_value) : sig
+    type ('a, 'length) seq =
+      | [] : (unit, zero) seq
+      | ( :: ) :
+          ('a T.t, 'a T.attribute) Type_directed.Key.t * ('b, 'l) seq
+          -> ('a * 'b, 'l succ) seq
+
+    type ('a, 'length) t = ('a, 'length succ) seq
+  end
+```
+This enforces that the length of the list is at least 1.
+
+For example, we have
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=record_t -->
+```ocaml
+type t1 =
+  { f1 : int
+  ; f2 : string
+  }
+
+(* Generated value passed in to [of_record] *)
+let t_t1 : (int * (string * unit), zero succ) Type_directed.Record(T).t =
+  [ { name = "f1"; value = t_int;    attribute = None }
+  ; { name = "f2"; value = t_string; attribute = None }
+  ]
+;;
+```
+
+Finally, the variant data structure is also a GADT where each element
+represents its constructors (ordinary or inlined record) as shown below.
+<!-- $MDX file=test/inline/readme_scratch.ml,part=variant -->
+```ocaml
+  module Variant (T : Type_directed.Type_directed_value) : sig
+    type 'a variant =
+      | Unlabelled : ('a, 'length) Type_directed.Variant_constructor(T).t -> 'a variant
+      | Labelled   : ('a, 'length) Type_directed.Record             (T).t -> 'a variant
+
+    type ('a, 'length) t =
+      | [] : (Nothing.t, zero) t
+      | ( :: ) :
+          ('a variant, 'a T.attribute) Type_directed.Key.t * ('b, 'l) t
+          -> (('a, 'b) Either.t, 'l succ) t
+  end
+end
+```
+Note that the definition of `Variant_constructor` is the same as `Tuple`
+but without the guarantee that the list has length >= 2. The index of the GADT now
+is nested `Either.t` instead of pairs to represent arbitrary length sum types.
+
+For example, we have
+<!-- $MDX file=test/inline/readme_scratch.ml,part=variant_t -->
+```ocaml
+type t2 =
+  | A
+  | B of int * string
+  | C of { f : int }
+
+(* Generated value passed in to [of_variant] *)
+let t_t2
+  : ( (unit, (int * (string * unit), (int * unit, Nothing.t) Either.t) Either.t) Either.t
+    , zero succ succ succ ) Type_directed.Variant(T).t
+  =
+  [ { name = "A"; value = Unlabelled []                 ; attribute = None }
+  ; { name = "B"; value = Unlabelled [ t_int; t_string ]; attribute = None }
+  ; { name      = "C"
+    ; value     = Labelled [ { name = "f"; value = t_int; attribute = None } ]
+    ; attribute = None
+    }
+  ]
+;;
+```
+
+The implementation of `of_record` and `of_variant` for a type-directed value
+that is the `equals` function are similar to `of_tuple` but is expectedly
+more verbose and omitted here. You can find it in `test/examples/equals.ml`.
+
+
+apply_iso
+-----------
+
+As mentioned above, the type of the GADT index is not exactly the type
+of what we wish to derive.  But it happens to be isomorphic, so the
+PPX calls `apply_iso` to turn the generated type-directed value from
+`of_{tuple,record,variant}` into the desired type.
+
+The implementation of `apply_iso` is generally simple. If the type-directed
+value is the `equals` function with type `'a -> 'a -> bool`, we have
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=apply_iso -->
+```ocaml
+let apply_iso instance _f f' x y = instance (f' x) (f' y)
+```
+
+Invoking the PPX
+======================
+
+The PPX takes the name of the module satisfying the interface above
+as a command-line argument. For example, if the fully-qualified
+module name is `Type_directed.Equals`, you should add
+```
+(preprocess (pps (ppx_type_directed_value -module -Type_directed.Equals)))
+```
+to the jbuild, which will register the deriver `[@@deriving equals]`.
+Multiple modules can be registered by passing multiple
+arguments of the form `-module -{Module_name}`.
+
+Note that the module name should currently be prefixed with "-" in order
+to get jenga to parse it as a command line argument.
+
+
+Naming Conventions
+========================
+
+This PPX assumes (and generates) standard naming conventions for generated type-directed values.
+Namely,
+
+```
+type t = ... [@@deriving equals]
+
+(* generates *)
+let equals : t Equals.T.t = ...
+
+type custom_type = ... [@@deriving equals]
+
+(* generates *)
+let equals_custom_type : custom_type Equals.T.t = ...
+
+type 'a poly = ... [@@deriving equals]
+
+(* generates *)
+let equals_poly : 'a Equals.T.t -> 'a poly Equals.T.t = ...
+```
+
+and so on.
+
+Attributes
+==============
+
+This PPX has support for user-defined attributes on record fields and
+variant constructors. Given a module (say)
+`Ppx_type_directed_value_examples.Validate`, the attribute `validate`
+is registered as shown below.
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=attribute-user -->
+```ocaml
+let f2_attrib : int Ppx_type_directed_value_examples.Validate.attribute = Name "new-name"
+
+type attrib_record =
+  { f1 : int
+  ; f2 : int [@validate f2_attrib]
+  }
+[@@deriving validate]
+
+let a_attrib : unit Ppx_type_directed_value_examples.Validate.attribute =
+  Name "new-name-1"
+;;
+
+let b_attrib : (int * (string * unit)) Ppx_type_directed_value_examples.Validate.attribute
+  =
+  Name "new-name-2"
+;;
+
+type attrib_variant_simple =
+  | A [@validate a_attrib]
+  | B of
+      { f1 : int
+      ; f2 : string
+      } [@validate b_attrib]
+[@@deriving validate]
+```
+Note that the polymorphic attribute type is instantiated with the type of
+the field/constructor, and is passed to the `attribute` field in `Key.t`.
+
+This PPX also registers the attribute `{module}.custom` to replace the default
+type-directed value the PPX uses for a field/constructor. For instance,
+
+<!-- $MDX file=test/test.ml,part=attribute-custom -->
+```ocaml
+    let always_equal : int -> int -> bool = fun _ _ -> true
+
+    type t = { f1 : int [@type_directed_equal.custom always_equal] }
+    [@@deriving type_directed_equal]
+```
+
+the PPX will populate the `value` field of the `Key.t` record with
+`always_equal` instead of the default type-directed value, `type_directed_equal_int`.
+
+
+Converters
+=============
+
+There are instances when the decision of how to compose type-directed values are
+local, that is, you consider one field/constructor at a time and specify how to
+combine the field/constructor with the recursively constructed type-directed value
+of the rest of the record/variant. We provide a set of converters (`ppx_runtime/converters_intf.ml`)
+with that take in comparatively simpler interfaces and produces modules that satisfy
+the interface that the PPX expects. We present them in increasing order of complexity.
+
+Of_applicative
+------------------
+
+An applicative module with type `Applicative.S` has sufficient
+information to build a `Type_directed.S` that supports records and
+tuples, but not variants. This can be done by using the
+`Of_applicative` functor on the applicative module.
+
+Semantically, the type-directed value is constructed as follows.
+
+<!-- $MDX file=test/inline/readme_scratch.ml,part=of_applicative -->
+```ocaml
+type t =
+  { f1 : int
+  ; f2 : string
+  }
+[@@deriving command]
+
+let command : (int * (string * unit)) Ppx_type_directed_value_examples.Command.T.t =
+  let open Command.Param in
+  both command_int (both command_string (return ()))
+;;
+```
+
+For example, a PPX deriver for `Core.Command.Params` can be instantiated by
+
+<!-- $MDX file=examples/type_directed_command.ml,part=of_applicative -->
+```ocaml
+open Ppx_type_directed_value_runtime
+include Converters.Of_applicative (Core.Command.Param)
+```
+
+Note that attempting to derive variants with a `Type_directed.S` constructed in this manner
+will result in a *runtime* error.
+
+Of_simple
+------------
+
+If support for both records and variants are desired, but field names/constructor names
+are irrelevant, the `Of_simple` functor can be used to build a `Type_directed.S`.
+The input interface that is expected is
+
+<!-- $MDX file=ppx_runtime/converters_intf.ml,part=simple_sig -->
+```ocaml
+module type Simple = sig
+  type 'a t
+
+  val apply_iso : 'a t -> ('a -> 'b) -> ('b -> 'a) -> 'b t
+  val both      : 'a t -> 'b t -> ('a * 'b) t
+  val unit      : unit t
+  val either    : 'a t -> 'b t -> ('a, 'b) Either.t t
+  val nothing   : Nothing.t t
+end
+```
+
+* `both` specifies how to add an additional type-directed value, used for
+  processing an additional record field or variant constructor argument.
+* `either` specifies how to case an additional type-directed value, used
+  for processing an additional variant constructor.
+* `unit` is the default/base case for product types - for the `equals` function it
+  is `fun () () -> true`
+* `nothing` is the default/base case for variant types - for the `all` function in
+  `ppx_enumerate` it is `[]`
+* `apply_iso` is the same as in `Type_directed.S`
+
+An example using `Of_simple` can be found in `examples/type_directed_enumerate.ml`
+
+Of_simple_with_key
+-----------------------
+
+If field names/constructor names are relevant, the `Of_simple_with_key` functor
+can be used to build a `Type_directed.S`.
+The input interface that is expected is
+
+<!-- $MDX file=ppx_runtime/converters_intf.ml,part=simple_with_key_sig -->
+```ocaml
+module type Simple_with_key = sig
+  type 'a t
+  type 'a attribute
+
+  val apply_iso  : 'a t -> ('a -> 'b) -> ('b -> 'a) -> 'b t
+  val both       : 'a t -> 'b t -> ('a * 'b) t
+  val unit       : unit t
+  val nothing    : Nothing.t t
+  val both_key   : ('a t, 'a attribute) Key.t -> 'b t -> ('a * 'b) t
+  val either_key : ('a t, 'a attribute) Key.t -> 'b t -> ('a, 'b) Either.t t
+end
+```
+
+`Simple_with_key` differs from `Simple_key` by requiring an additional
+`both_key` function and requires an `either_key` instead of `either`.
+Both `both_key` and `either_key` have similar semantics as `both`
+and `either` from above, except they have access to field names and
+attributes in addition to the type-directed value.
+
+An example using `Of_simple_with_key` can be found in `examples/type_directed_validate.ml`
+
+
+
+Runtime Considerations
+==============================
+
+The usage of this PPX does incur a runtime cost proportional to the size of the type
+(e.g. number of fields/constructors/elements in a record/variant/tuple).
+In particular, if the type-directed value is a function type,
+there will be a runtime cost on *every* invocation of the function.
+
+A micro-benchmark was performed on the `equals` function from `[@@deriving equal]`
+and from `[@@deriving type_directed_equal]` implemented with this PPX, using
+`Int.equal` and `String.equal` for field comparisons. (see `bench/bench.ml`)
+
+| # of record fields | Time/Run [@@deriving equal] | Time/Run [@@deriving type_directed_equal] |
+|--------------------+-----------------------------+-------------------------------------------|
+|                  6 | 13.29ns                     | 46.91ns                                   |
+|                 16 | 30.83ns                     | 141.29ns                                  |
+|                 30 | 58.37ns                     | 264.35ns                                  |
+|                 60 | 121.50ns                    | 500.42ns                                  |

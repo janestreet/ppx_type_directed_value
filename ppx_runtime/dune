@@ -1,0 +1,3 @@
+(library (name ppx_type_directed_value_runtime)
+ (public_name ppx_type_directed_value.runtime) (libraries base)
+ (preprocess (pps ppx_jane)))

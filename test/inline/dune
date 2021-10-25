@@ -1,0 +1,9 @@
+(library (name ppx_type_directed_value_inline_tests)
+ (libraries core_kernel.core expect_test_helpers_core
+  ppx_type_directed_value_examples)
+ (preprocess
+  (pps ppx_jane ppx_type_directed_value -module
+   -Ppx_type_directed_value_examples.Type_directed_equal -module
+   -Ppx_type_directed_value_examples.Type_directed_enumerate -module
+   -Ppx_type_directed_value_examples.Validate -module
+   -Ppx_type_directed_value_examples.Command)))

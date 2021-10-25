@@ -1,0 +1,10 @@
+(library (name ppx_type_directed_value_test)
+ (libraries core_kernel.core ppx_type_directed_value_examples)
+ (preprocess
+  (pps ppx_type_directed_value -module
+   -Ppx_type_directed_value_examples.Type_directed_equal)))
+
+(alias (name DEFAULT) (deps test_ml_pp.output))
+
+(rule (targets test_ml_pp.output) (deps (:first_dep test.ml.pp))
+ (action (bash "cp %{first_dep} %{targets}")))
