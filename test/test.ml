@@ -5,22 +5,22 @@ let _ = "-*-tuareg-*-"
 
 open Core
 
-let type_directed_equal_int    = Int.equal
+let type_directed_equal_int = Int.equal
 let type_directed_equal_string = String.equal
 
 let rec type_directed_equal_list gen_cmp l1 l2 =
   match l1, l2 with
   | hd1 :: tl1, hd2 :: tl2 ->
     gen_cmp hd1 hd2 && (type_directed_equal_list gen_cmp) tl1 tl2
-  | []        , []         -> true
-  | _         , _          -> false
+  | [], [] -> true
+  | _, _ -> false
 ;;
 
 module M_inner = struct
   type t = { f1 : string } [@@deriving type_directed_equal]
 end
 
-module M : sig
+module _ : sig
   type ('a, 'b) polymorphic =
     | Pa of 'a * 'b
     | Pb of 'b * 'a * int
@@ -88,8 +88,8 @@ end = struct
     | E of M_inner.t * M_inner.t
   [@@deriving type_directed_equal]
 
-  type 'a alias_j = 'a           [@@deriving type_directed_equal]
-  type alias_k    = test alias_j [@@deriving type_directed_equal]
+  type 'a alias_j = 'a [@@deriving type_directed_equal]
+  type alias_k = test alias_j [@@deriving type_directed_equal]
   type ('a, 'b, 'c) alias_l = 'b [@@deriving type_directed_equal]
 
   type lbl_variant =
@@ -136,7 +136,7 @@ end = struct
         } [@type_directed_equal CustomCmp (fun _ _ -> true)]
   [@@deriving type_directed_equal]
 
-  module Custom_demonstration = struct
+  module _ = struct
     (* $MDX part-begin=attribute-custom *)
     let always_equal : int -> int -> bool = fun _ _ -> true
 

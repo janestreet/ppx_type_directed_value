@@ -5,7 +5,7 @@ open Ppx_type_directed_value_runtime
 open Ppx_type_directed_value_runtime.Type_directed.Type_nat
 
 (* $MDX part-begin=sexp_implementation *)
-module Sexp = struct
+module _ = struct
   type 'a t =
     { sexp_of_t : 'a -> Sexp.t
     ; t_of_sexp : Sexp.t -> 'a
@@ -19,7 +19,7 @@ end
 
 (* $MDX part-begin=equal_implementation *)
 module T = struct
-  type 'a t         = 'a -> 'a -> bool
+  type 'a t = 'a -> 'a -> bool
   type 'a attribute = Nothing.t
 end
 
@@ -27,7 +27,7 @@ end
 
 module type S = sig
   (* $MDX part-begin=tuple *)
-  module Tuple (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type ('a, 'length) seq =
       | [] : (unit, zero) seq
       | ( :: ) : 'a T.t * ('b, 'l) seq -> ('a * 'b, 'l succ) seq
@@ -38,7 +38,7 @@ module type S = sig
   (* $MDX part-end *)
 
   (* $MDX part-begin=record *)
-  module Record (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type ('a, 'length) seq =
       | [] : (unit, zero) seq
       | ( :: ) :
@@ -51,10 +51,10 @@ module type S = sig
   (* $MDX part-end *)
 
   (* $MDX part-begin=variant *)
-  module Variant (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type 'a variant =
       | Unlabelled : ('a, 'length) Type_directed.Variant_constructor(T).t -> 'a variant
-      | Labelled   : ('a, 'length) Type_directed.Record             (T).t -> 'a variant
+      | Labelled : ('a, 'length) Type_directed.Record(T).t -> 'a variant
 
     type ('a, 'length) t =
       | [] : (Nothing.t, zero) t
@@ -66,7 +66,7 @@ end
 
 (* $MDX part-end *)
 
-let t_int    = Int.equal
+let t_int = Int.equal
 let t_string = String.equal
 
 (* $MDX part-begin=record_t *)
@@ -77,7 +77,7 @@ type t1 =
 
 (* Generated value passed in to [of_record] *)
 let t_t1 : (int * (string * unit), zero succ) Type_directed.Record(T).t =
-  [ { name = "f1"; value = t_int;    attribute = None }
+  [ { name = "f1"; value = t_int; attribute = None }
   ; { name = "f2"; value = t_string; attribute = None }
   ]
 ;;
@@ -95,10 +95,10 @@ let t_t2
   : ( (unit, (int * (string * unit), (int * unit, Nothing.t) Either.t) Either.t) Either.t
     , zero succ succ succ ) Type_directed.Variant(T).t
   =
-  [ { name = "A"; value = Unlabelled []                 ; attribute = None }
+  [ { name = "A"; value = Unlabelled []; attribute = None }
   ; { name = "B"; value = Unlabelled [ t_int; t_string ]; attribute = None }
-  ; { name      = "C"
-    ; value     = Labelled [ { name = "f"; value = t_int; attribute = None } ]
+  ; { name = "C"
+    ; value = Labelled [ { name = "f"; value = t_int; attribute = None } ]
     ; attribute = None
     }
   ]

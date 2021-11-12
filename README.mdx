@@ -79,7 +79,7 @@ end
 
 type t =
   { host_and_port : Host_and_port.t
-  ; name          : string option
+  ; name : string option
            [@command.custom
              let open Command.Param in
              flag "name" (optional string) ~doc:"name"]
@@ -163,7 +163,7 @@ would be
 
 <!-- $MDX file=test/inline/readme_scratch.ml,part=sexp_implementation -->
 ```ocaml
-module Sexp = struct
+module _ = struct
   type 'a t =
     { sexp_of_t : 'a -> Sexp.t
     ; t_of_sexp : Sexp.t -> 'a
@@ -193,7 +193,7 @@ of each tuple element.
 
 <!-- $MDX file=test/inline/readme_scratch.ml,part=tuple -->
 ```ocaml
-  module Tuple (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type ('a, 'length) seq =
       | [] : (unit, zero) seq
       | ( :: ) : 'a T.t * ('b, 'l) seq -> ('a * 'b, 'l succ) seq
@@ -223,7 +223,7 @@ that is the `equals` function.
 <!-- $MDX file=test/inline/readme_scratch.ml,part=equal_implementation -->
 ```ocaml
 module T = struct
-  type 'a t         = 'a -> 'a -> bool
+  type 'a t = 'a -> 'a -> bool
   type 'a attribute = Nothing.t
 end
 ```
@@ -269,7 +269,7 @@ each element is a `('a, 'attribute) Key(T).t` as shown below.
 
 <!-- $MDX file=test/inline/readme_scratch.ml,part=record -->
 ```ocaml
-  module Record (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type ('a, 'length) seq =
       | [] : (unit, zero) seq
       | ( :: ) :
@@ -292,7 +292,7 @@ type t1 =
 
 (* Generated value passed in to [of_record] *)
 let t_t1 : (int * (string * unit), zero succ) Type_directed.Record(T).t =
-  [ { name = "f1"; value = t_int;    attribute = None }
+  [ { name = "f1"; value = t_int; attribute = None }
   ; { name = "f2"; value = t_string; attribute = None }
   ]
 ;;
@@ -302,10 +302,10 @@ Finally, the variant data structure is also a GADT where each element
 represents its constructors (ordinary or inlined record) as shown below.
 <!-- $MDX file=test/inline/readme_scratch.ml,part=variant -->
 ```ocaml
-  module Variant (T : Type_directed.Type_directed_value) : sig
+  module _ (T : Type_directed.Type_directed_value) : sig
     type 'a variant =
       | Unlabelled : ('a, 'length) Type_directed.Variant_constructor(T).t -> 'a variant
-      | Labelled   : ('a, 'length) Type_directed.Record             (T).t -> 'a variant
+      | Labelled : ('a, 'length) Type_directed.Record(T).t -> 'a variant
 
     type ('a, 'length) t =
       | [] : (Nothing.t, zero) t
@@ -332,10 +332,10 @@ let t_t2
   : ( (unit, (int * (string * unit), (int * unit, Nothing.t) Either.t) Either.t) Either.t
     , zero succ succ succ ) Type_directed.Variant(T).t
   =
-  [ { name = "A"; value = Unlabelled []                 ; attribute = None }
+  [ { name = "A"; value = Unlabelled []; attribute = None }
   ; { name = "B"; value = Unlabelled [ t_int; t_string ]; attribute = None }
-  ; { name      = "C"
-    ; value     = Labelled [ { name = "f"; value = t_int; attribute = None } ]
+  ; { name = "C"
+    ; value = Labelled [ { name = "f"; value = t_int; attribute = None } ]
     ; attribute = None
     }
   ]

@@ -3,7 +3,7 @@ open Import
 include Attrs_intf
 
 let for_declaration
-      (type    target  )
+      (type target)
       (module_ : string)
       (context : target Attribute.Context.t)
   =
@@ -40,8 +40,7 @@ let declare_attrs (module_ : string) =
 
     module For_row_field = (val for_declaration module_ Attribute.Context.rtag)
 
-    module For_type_declaration =
-      (val for_declaration module_ Attribute.Context.type_declaration)
+    module _ = (val for_declaration module_ Attribute.Context.type_declaration)
   end
   in
   (module M : Attrs_declarations)
@@ -51,5 +50,5 @@ let generate declared_attr item ~loc : expression =
   let attrs = Attribute.get declared_attr item in
   match attrs with
   | Some exp -> [%expr Some [%e exp]]
-  | None     -> [%expr None         ]
+  | None -> [%expr None]
 ;;

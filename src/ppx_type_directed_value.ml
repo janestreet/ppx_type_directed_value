@@ -145,5 +145,3 @@ let () =
     (String register_deriver)
     ~doc:"<module> Type directed module to derive"
 ;;
-
-module Pattern_or_expression = Pattern_or_expression
