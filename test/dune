@@ -1,5 +1,5 @@
 (library (name ppx_type_directed_value_test)
- (libraries core_kernel.core ppx_type_directed_value_examples)
+ (libraries core ppx_type_directed_value_examples)
  (preprocess
   (pps ppx_type_directed_value -module
    -Ppx_type_directed_value_examples.Type_directed_equal)))
